@@ -568,7 +568,9 @@ class Trainer:
         model.train()
         for k, v in inputs.items():
             inputs[k] = v.to(self.args.device)
-
+        
+        outputs = model.inference(inputs[0])
+        print(outputs)
         outputs = model(**inputs)
         loss = outputs[0]  # model outputs are always tuple in transformers (see doc)
 
