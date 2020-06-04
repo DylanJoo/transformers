@@ -756,23 +756,25 @@ class Trainer:
                 inputs[k] = v.to(self.args.device)
 
             with torch.no_grad():
-                outputs = model(**inputs)
+                output = model.inference(inputs['src_seq'])
+                #outputs = model(**inputs)
                 if has_labels:
                     step_eval_loss, logits = outputs[:2]
                     eval_losses += [step_eval_loss.mean().item()]
-                else:
-                    logits = outputs[0]
+                #else:
+                ## No need to indexing the item.
+                    #logits = outputs[0]
 
             if not prediction_loss_only:
                 if preds is None:
                     preds = logits.detach()
                 else:
                     preds = torch.cat((preds, logits.detach()), dim=0)
-                if inputs.get("labels") is not None:
+                if inputs.get("tgt_seq") is not None:
                     if label_ids is None:
-                        label_ids = inputs["labels"].detach()
+                        label_ids = inputs["tgt_seq"].detach()
                     else:
-                        label_ids = torch.cat((label_ids, inputs["labels"].detach()), dim=0)
+                        label_ids = torch.cat((label_ids, inputs["tgt_seq"].detach()), dim=0)
 
         if self.args.local_rank != -1:
             # In distributed mode, concatenate all results from all nodes:
