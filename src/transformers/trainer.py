@@ -24,6 +24,8 @@ from .modeling_utils import PreTrainedModel
 from .optimization import AdamW, get_linear_schedule_with_warmup
 from .trainer_utils import PREFIX_CHECKPOINT_DIR, EvalPrediction, PredictionOutput, TrainOutput
 from .training_args import TrainingArguments, is_tpu_available
+from .tokenization_t5 import T5Tokenizer
+
 
 
 try:
@@ -179,6 +181,7 @@ class Trainer:
         prediction_loss_only=False,
         tb_writer: Optional["SummaryWriter"] = None,
         optimizers: Tuple[torch.optim.Optimizer, torch.optim.lr_scheduler.LambdaLR] = None,
+        tokenizer: Optional[T5Tokenizer] = None,
     ):
         """
         Trainer is a simple but feature-complete training and eval loop for PyTorch,
@@ -199,6 +202,7 @@ class Trainer:
         self.compute_metrics = compute_metrics
         self.prediction_loss_only = prediction_loss_only
         self.optimizers = optimizers
+        self.tokenizer = tokenizer
         if tb_writer is not None:
             self.tb_writer = tb_writer
         elif is_tensorboard_available() and self.is_world_master():
@@ -676,7 +680,8 @@ class Trainer:
             shutil.rmtree(checkpoint)
 
     def evaluate(
-        self, eval_dataset: Optional[Dataset] = None, prediction_loss_only: Optional[bool] = None,
+        self, eval_dataset: Optional[Dataset] = None, 
+        prediction_loss_only: Optional[bool] = None, 
     ) -> Dict[str, float]:
         """
         Run evaluation and return metrics.
@@ -755,22 +760,25 @@ class Trainer:
 
             with torch.no_grad():
                 output = model.inference(inputs['src_seq'])
+                                
                 #outputs = model(**inputs)
-                if has_labels:
-                    step_eval_loss, logits = outputs[:2]
-                    eval_losses += [step_eval_loss.mean().item()]
+                #if has_labels:
+                #    step_eval_loss, logits = outputs[:2]
+                #    eval_losses += [step_eval_loss.mean().item()]
                 #else:
                 ## No need to indexing the item.
                     #logits = outputs[0]
 
             if not prediction_loss_only:
+                
                 if preds is None:
-                    preds = logits.detach()
+                    preds = output.detach()
                 else:
-                    preds = torch.cat((preds, logits.detach()), dim=0)
+                    preds = torch.cat((preds, output.detach()), dim=0)
+                    
                 if inputs.get("tgt_seq") is not None:
                     if label_ids is None:
-                        label_ids = inputs["tgt_seq"].detach()
+                        label_ids = inputs['tgt_seq'].detach()
                     else:
                         label_ids = torch.cat((label_ids, inputs["tgt_seq"].detach()), dim=0)
 
@@ -792,18 +800,27 @@ class Trainer:
             preds = preds.cpu().numpy()
         if label_ids is not None:
             label_ids = label_ids.cpu().numpy()
+            
+        # From tensor ids to token(words)
+        predictions = self.tok2word(preds)
+        truth = self.tok2word(label_ids)
+        
+        # Dump and save into text file
+        self.sent_dump('predict_val.txt', predictions)
+        self.sent_dump('target_val.txt', truth)
+        print('Results saved.')
 
-        if self.compute_metrics is not None and preds is not None and label_ids is not None:
-            metrics = self.compute_metrics(EvalPrediction(predictions=preds, label_ids=label_ids))
-        else:
-            metrics = {}
+        #if self.compute_metrics is not None and preds is not None and label_ids is not None:
+        #    metrics = self.compute_metrics(EvalPrediction(predictions=preds, label_ids=label_ids))
+        #else:
+        metrics = {}
         if len(eval_losses) > 0:
-            metrics["eval_loss"] = np.mean(eval_losses)
+            metrics["eval_loss"] = np.mean([0, 0, 0]) # pretend zero loss.
 
         # Prefix all keys with eval_
-        for key in list(metrics.keys()):
-            if not key.startswith("eval_"):
-                metrics[f"eval_{key}"] = metrics.pop(key)
+        #for key in list(metrics.keys()):
+        #    if not key.startswith("eval_"):
+        #        metrics[f"eval_{key}"] = metrics.pop(key)
 
         return PredictionOutput(predictions=preds, label_ids=label_ids, metrics=metrics)
 
@@ -818,3 +835,14 @@ class Trainer:
         # truncate the dummy elements added by SequentialDistributedSampler
         output = concat[:num_total_examples]
         return output
+    
+    def tok2word(self, batch):
+        batch_sent = []
+        for sent in batch:
+            samples = self.tokenizer.decode(sent, skip_special_tokens=True)
+            batch_sent.append(samples)
+        return batch_sent
+
+    def sent_dump(self, file_output, samples):
+        with open('results'+file_output, 'w') as file:
+            file.writelines(samples)
